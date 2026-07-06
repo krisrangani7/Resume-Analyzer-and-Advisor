@@ -1,4 +1,4 @@
-# AI Resume Analyzer & Advisor
+# Resume Analyzer & Advisor
 
 A full-stack AI platform with two products sharing one backend — a **Recruiter Dashboard** that shortlists candidates against a job's criteria using RAG, and a **Student Dashboard** that generates and critiques resumes using an LLM. Built with FastAPI, React, PostgreSQL, Pinecone, and the Gemini API.
 
