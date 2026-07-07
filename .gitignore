@@ -1,6 +1,27 @@
-backend/venv/
-backend/__pycache__/
-backend/.env
-frontend/node_modules/
-frontend/dist/
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# IntelliJ
+.idea/
+*.iml
+
+# Environment
+.env
+
+# Uploads
+uploads/
+
+# macOS
 .DS_Store
+
+# Logs
+*.log
+
+# Build
+dist/
+build/
