@@ -34,7 +34,7 @@ React (Vite)  →  FastAPI  →  PostgreSQL   (jobs, candidates, results, struct
 ```
 
 **The RAG shortlisting loop:**
-1. Every uploaded resume is parsed to plain text, embedded with Gemini (`text-embedding-004`), and upserted into Pinecone under a namespace scoped to that job.
+1. Every uploaded resume is parsed to plain text, embedded with Gemini (`gemini-embedding-001`, truncated to 768 dimensions via `output_dimensionality` to match the Pinecone index), and upserted into Pinecone under a namespace scoped to that job.
 2. Running "shortlist" embeds the job's criteria as a query, retrieves the most semantically relevant candidates from that namespace, then asks Gemini for a structured, evidence-based verdict (score, matched/missing skills, reasons) for each one.
 3. Results are stored in PostgreSQL so they persist and can be re-fetched instantly, without re-running the LLM.
 
@@ -49,7 +49,7 @@ React (Vite)  →  FastAPI  →  PostgreSQL   (jobs, candidates, results, struct
 | Database | PostgreSQL |
 | ORM | SQLAlchemy |
 | Vector Database | Pinecone (per-job namespaces for RAG) |
-| LLM / Embeddings | Google Gemini (`gemini-2.5-flash`, `text-embedding-004`) |
+| LLM / Embeddings | Google Gemini (`gemini-2.5-flash`, `gemini-embedding-001`) |
 | Resume Parsing | pdfplumber (PDF), python-docx (DOCX) |
 | Containerization | Docker Compose (PostgreSQL) |
 
@@ -93,7 +93,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/resume_analyzer
 
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash
-GEMINI_EMBEDDING_MODEL=text-embedding-004
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 
 PINECONE_API_KEY=your_pinecone_api_key_here
 PINECONE_INDEX_NAME=resume-analyzer
@@ -103,6 +103,8 @@ PINECONE_REGION=us-east-1
 CORS_ORIGINS=http://localhost:5173
 UPLOAD_DIR=./uploads
 ```
+
+> **Note on embeddings:** `gemini-embedding-001` outputs 3072-dimensional vectors by default. `vector_service.py` pins this down to 768 dimensions via the `output_dimensionality` parameter to match the Pinecone index (`_EMBED_DIM = 768`). If you change the embedding model, keep these two values in sync — a mismatch causes Pinecone upserts to fail with a `Vector dimension ... does not match the dimension of the index` error.
 
 ---
 
