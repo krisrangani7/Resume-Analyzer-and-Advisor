@@ -52,6 +52,7 @@ React (Vite)  →  FastAPI  →  PostgreSQL   (jobs, candidates, results, struct
 | LLM / Embeddings | Google Gemini (`gemini-2.5-flash`, `gemini-embedding-001`) |
 | Resume Parsing | pdfplumber (PDF), python-docx (DOCX) |
 | Containerization | Docker Compose (PostgreSQL) |
+| Development Environment | IntelliJ IDEA, Visual Studio Code |
 
 ---
 
