@@ -1,3 +1,4 @@
+import concurrent.futures
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
@@ -6,6 +7,9 @@ from app import models, schemas
 from app.services import resume_parser, vector_service, llm_service
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter"])
+
+BATCH_SIZE = 6  # resumes scored per LLM call
+MAX_CONCURRENT_BATCHES = 3  # batches sent to Gemini at once
 
 
 @router.post("/jobs", response_model=schemas.JobOut)
@@ -45,6 +49,21 @@ async def upload_resumes(job_id: str, files: list[UploadFile] = File(...), db: S
             raise HTTPException(400, str(e))
 
         contact = resume_parser.quick_extract_contact(text)
+
+        # Duplicate check
+        existing = (
+            db.query(models.Candidate)
+            .filter(
+                models.Candidate.job_id == job_id,
+                models.Candidate.email == contact["email"],
+            )
+            .first()
+        )
+
+        if existing:
+            created.append(existing)
+            continue
+
         candidate = models.Candidate(
             job_id=job_id,
             name=contact["name_guess"],
@@ -69,10 +88,27 @@ async def upload_resumes(job_id: str, files: list[UploadFile] = File(...), db: S
     return created
 
 
+def _score_batch(job_dict: dict, batch: list):
+    payload = [{"id": c.id, "resume_text": c.resume_text} for c in batch]
+    try:
+        return llm_service.evaluate_candidates_batch(job_dict, payload)
+    except Exception as e:
+        print(f"Batch scoring failed, falling back to single calls: {e}")
+        out = {}
+        for c in batch:
+            try:
+                out[c.id] = llm_service.evaluate_candidate(job_dict, c.resume_text)
+            except Exception as e2:
+                print(f"Candidate {c.id} evaluation failed: {e2}")
+        return out
+
+
 @router.post("/jobs/{job_id}/shortlist", response_model=list[schemas.ShortlistResultOut])
 def run_shortlist(job_id: str, top_k: int = 50, db: Session = Depends(get_db)):
     """RAG step: pull the most semantically relevant candidates from Pinecone,
-    then have the LLM give an evidence-based verdict + reasons for each."""
+    then have the LLM give an evidence-based verdict + reasons for each.
+    Candidates are scored in small batches, run concurrently, instead of one
+    LLM call per candidate — this is what makes shortlisting fast."""
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
@@ -99,9 +135,17 @@ def run_shortlist(job_id: str, top_k: int = 50, db: Session = Depends(get_db)):
     if matched_ids:
         candidates = [c for c in candidates if c.id in matched_ids] or candidates
 
+    batches = [candidates[i:i + BATCH_SIZE] for i in range(0, len(candidates), BATCH_SIZE)]
+
+    verdicts = {}
+    if batches:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
+            for batch_result in pool.map(lambda b: _score_batch(job_dict, b), batches):
+                verdicts.update(batch_result)
+
     results = []
     for candidate in candidates:
-        verdict = llm_service.evaluate_candidate(job_dict, candidate.resume_text)
+        verdict = verdicts.get(candidate.id, {})
 
         existing = db.query(models.ShortlistResult).filter(
             models.ShortlistResult.candidate_id == candidate.id

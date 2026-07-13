@@ -1,15 +1,16 @@
 """Wraps Gemini embeddings + Pinecone so the rest of the app just deals with
 plain text in and ranked matches out.
 """
-import google.generativeai as genai
+
+from google import genai
 from pinecone import Pinecone, ServerlessSpec
 
 from app.config import settings
 
-genai.configure(api_key=settings.gemini_api_key)
+client = genai.Client(api_key=settings.gemini_api_key)
 
 _pc = Pinecone(api_key=settings.pinecone_api_key)
-_EMBED_DIM = 768  # text-embedding-004 output size
+_EMBED_DIM = 3072
 
 
 def _ensure_index():
@@ -19,46 +20,58 @@ def _ensure_index():
             name=settings.pinecone_index_name,
             dimension=_EMBED_DIM,
             metric="cosine",
-            spec=ServerlessSpec(cloud=settings.pinecone_cloud, region=settings.pinecone_region),
+            spec=ServerlessSpec(
+                cloud=settings.pinecone_cloud,
+                region=settings.pinecone_region,
+            ),
         )
     return _pc.Index(settings.pinecone_index_name)
 
 
-def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
-    """task_type: 'retrieval_document' for candidate resumes,
-    'retrieval_query' for the job-criteria query."""
-    result = genai.embed_content(
-        model=f"models/{settings.gemini_embedding_model}",
-        content=text[:20000],  # keep payload sane
-        task_type=task_type,
-        output_dimensionality=_EMBED_DIM,
+def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
+    response = client.models.embed_content(
+        model=settings.gemini_embedding_model,
+        contents=text[:20000],
     )
-    return result["embedding"]
+
+    return response.embeddings[0].values
 
 
 def upsert_candidate(job_id: str, candidate_id: str, resume_text: str, metadata: dict):
     index = _ensure_index()
-    vector = embed_text(resume_text, task_type="retrieval_document")
+    vector = embed_text(resume_text)
+
     index.upsert(
-        vectors=[{"id": candidate_id, "values": vector, "metadata": {**metadata, "job_id": job_id}}],
+        vectors=[
+            {
+                "id": candidate_id,
+                "values": vector,
+                "metadata": {**metadata, "job_id": job_id},
+            }
+        ],
         namespace=job_id,
     )
 
 
 def query_top_candidates(job_id: str, job_criteria_text: str, top_k: int = 50):
-    """Returns [{candidate_id, score, metadata}] ranked by semantic similarity
-    to the job's criteria, scoped to that job's namespace."""
     index = _ensure_index()
-    vector = embed_text(job_criteria_text, task_type="retrieval_query")
+
+    vector = embed_text(job_criteria_text)
+
     response = index.query(
         vector=vector,
         top_k=top_k,
         namespace=job_id,
         include_metadata=True,
     )
+
     return [
-        {"candidate_id": match["id"], "score": match["score"], "metadata": match.get("metadata", {})}
-        for match in response.get("matches", [])
+        {
+            "candidate_id": m["id"],
+            "score": m["score"],
+            "metadata": m.get("metadata", {}),
+        }
+        for m in response["matches"]
     ]
 
 
@@ -67,4 +80,4 @@ def delete_job_namespace(job_id: str):
     try:
         index.delete(delete_all=True, namespace=job_id)
     except Exception:
-        pass  # namespace may not exist yet
+        pass
